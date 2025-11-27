@@ -8,8 +8,8 @@ Mener un entretien vocal en temps réel via LiveKit
 Utiliser un avatar Hedra pour la voix + lipsync
 
 ## 2. Architecture
-CV (PDF) ─► cv_parser.py ─► last_cv.json
-Job URL  ─► job_scraper.py ─► last_job.json
+CV (PDF) ─► cv_parser.py ─► last_cv.json<br>
+Job URL  ─► job_scraper.py ─► last_job.json<br>
 
 CV + Job ─► ManagerAgent ─► Question Agent ─► Live
 
@@ -17,10 +17,11 @@ LiveKit Realtime ─► Voix + Transcription
 Hedra Avatar ─► Animation + Lipsync
 
 ## 4. Configuration
-OPENAI_API_KEY=...
-HASDATA_API_KEY=...
-HEDRA_API_KEY=...
-HEDRA_AVATAR_ID=...
+OPENAI_API_KEY=...<br>
+HASDATA_API_KEY=...<br>
+LIVEKIT_API_KEY=...<br>
+HEDRA_API_KEY=...<br>
+HEDRA_AVATAR_ID=...<br>
 
 # Clonez le dépôt
 git clone https://github.com/.../interview_prep_ai_agent.git
