@@ -1,0 +1,19 @@
+{
+  "title": "",
+  "company": "",
+  "location": "",
+  "description": "",
+  "clean_description": "",
+  "details": {},
+  "benefits": [],
+  "raw_payload": {
+    "requestMetadata": {
+      "id": "d8110f50-5e1a-415e-9646-dd0c2e81c6e8",
+      "status": "ok",
+      "html": "https://files.hasdata.com/d8110f50-5e1a-415e-9646-dd0c2e81c6e8.html",
+      "json": "https://files.hasdata.com/d8110f50-5e1a-415e-9646-dd0c2e81c6e8.json",
+      "url": "https://fr.indeed.com/jobs?q=data+scientist&l=paris+%2875%29&ts=1764233466419&from=searchOnHP&rq=1&rsIdx=0&newcount=217&fromage=last&vjk=85fc7211f4016d5c"
+    },
+    "job": {}
+  }
+}

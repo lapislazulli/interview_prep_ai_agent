@@ -1,0 +1,47 @@
+{
+  "name": "",
+  "contact": "",
+  "skills": [],
+  "experiences": [
+    {
+      "title": "Assistance d’éducation",
+      "company": "Lycée Guy de Maupassant Colombes",
+      "years": "2020",
+      "description": "Surveillance des éléves et assistance au personnel administratif pour diverses taches."
+    },
+    {
+      "title": "Agent d’information et d’orientation",
+      "company": "City one, accueil passager Paris",
+      "years": "été 2019",
+      "description": "Agent d’information et d’orientation des passagers dans les gares SNCF et RATP."
+    },
+    {
+      "title": "Assistant chargé d’étude économique et statistique",
+      "company": "Institut National de la Statistique et de l'Analyse Economique (Bénin)",
+      "years": "2017-2018",
+      "description": "Enquéte statistique pour l'institut. Construction d’échantillon et analyse des données avec Eview. Qualités développées : Patience, autonomie et bon sens relationnel."
+    }
+  ],
+  "education": [
+    {
+      "degree": "Master IES Data Science for Social Sciences",
+      "school": "Université Paris Nanterre, France (CFA)",
+      "years": "2020-2022"
+    },
+    {
+      "degree": "Licence Economie & Gestion (option Economie)",
+      "school": "Université Paris Nanterre, France (UFR-SEGMI)",
+      "years": "2019-2020"
+    },
+    {
+      "degree": "Licence Economie (option Economie Appliquée)",
+      "school": "Université du Bénin (FASEG)",
+      "years": "2012-2016"
+    },
+    {
+      "degree": "Baccalauréat Scientifique",
+      "school": "Bénin (Djégan-kpévi)",
+      "years": "2011-2012"
+    }
+  ]
+}
