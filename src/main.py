@@ -1,4 +1,7 @@
-# src/ui/app.py
+# src/main.py
+#
+# Entry point for the Streamlit UI.
+# Run with:  streamlit run src/main.py
 
 import os
 import sys
@@ -7,11 +10,11 @@ import tempfile
 import streamlit as st
 
 # ---------------------------------------------------------
-# PATH SETUP
+# PATH SETUP — make all src/ imports work
 # ---------------------------------------------------------
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__)))
 if ROOT not in sys.path:
-    sys.path.append(ROOT)
+    sys.path.insert(0, ROOT)
 
 # ---------------------------------------------------------
 # IMPORTS
@@ -22,7 +25,8 @@ from agents.summary_agent import SummaryAgent
 from models.data_models import CVData, JobData
 from services.cv_parser import parse_cv
 from services.job_scraper import scrape_job_url
-from core.interview_simulator import InterviewSimulator
+from core.interview_simulator import InterviewSimulator, AVATAR_IDLE_HTML
+from utils.profile_export import export_cv, export_job
 
 # ---------------------------------------------------------
 # STREAMLIT CONFIG + CSS
@@ -68,7 +72,9 @@ st.markdown(
 # HEADER
 # ---------------------------------------------------------
 st.markdown("## Interview Prep Studio")
-st.caption("Simulation d'entretien vocale basée sur un système multi-agents (CV + offre + mémoire).")
+st.caption(
+    "Simulation d'entretien vocale basée sur un système multi-agents (CV + offre + mémoire)."
+)
 st.markdown("---")
 
 # ---------------------------------------------------------
@@ -82,7 +88,10 @@ with st.form("setup_form"):
         cv_file = st.file_uploader("CV (PDF)", type=["pdf"])
 
     with c2:
-        job_url = st.text_input("Lien de l'offre (Indeed / LinkedIn)", placeholder="https://fr.indeed.com/...")
+        job_url = st.text_input(
+            "Lien de l'offre (Indeed / LinkedIn)",
+            placeholder="https://fr.indeed.com/...",
+        )
 
     num_questions = st.slider("Nombre de questions dans la simulation", 3, 10, 5)
 
@@ -96,7 +105,6 @@ if submit:
         st.error("Merci d'uploader un CV et de coller un lien d'offre.")
     else:
         with st.spinner("Analyse du CV et de l'offre en cours…"):
-            # Sauvegarde locale du PDF
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(cv_file.getvalue())
                 pdf_path = tmp.name
@@ -104,6 +112,10 @@ if submit:
             llm = LLMClient()
             cv_data = parse_cv(pdf_path, llm)
             job_data = scrape_job_url(job_url)
+
+            # Persist to disk so the LiveKit worker can reload them
+            export_cv(cv_data)
+            export_job(job_data)
 
             st.session_state["cv_data"] = cv_data
             st.session_state["job_data"] = job_data
@@ -120,7 +132,10 @@ if "cv_data" in st.session_state and "job_data" in st.session_state:
     num_q: int = st.session_state["num_q"]
 
     # --- Étape 2 : Vue d'ensemble ---
-    st.markdown('<div class="section-title">Étape 2 · Vue d’ensemble</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title">Étape 2 · Vue d\'ensemble</div>',
+        unsafe_allow_html=True,
+    )
     colA, colB = st.columns(2)
 
     with colA:
@@ -130,7 +145,6 @@ if "cv_data" in st.session_state and "job_data" in st.session_state:
         contact = cv.structured.get("contact", "")
         if contact:
             st.caption(contact)
-
         skills = cv.structured.get("skills", []) or []
         if skills:
             st.write("**Compétences clés**")
@@ -147,38 +161,60 @@ if "cv_data" in st.session_state and "job_data" in st.session_state:
             st.caption(company)
         if location:
             st.caption(location)
+        desc = job.structured.get("clean_description", "")
+        if desc:
+            st.write(desc[:300] + ("…" if len(desc) > 300 else ""))
         st.markdown("</div>", unsafe_allow_html=True)
 
     # --- Étape 3 : Simulation vocale ---
-    st.markdown('<div class="section-title">Étape 3 · Simulation vocale</div>', unsafe_allow_html=True)
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-
-    st.write(
-        "Cliquez sur **Lancer la simulation**. "
-        "L'interviewer posera les questions à voix haute, vous répondez à l'oral, et le système enregistre l'historique."
+    st.markdown(
+        '<div class="section-title">Étape 3 · Simulation vocale</div>',
+        unsafe_allow_html=True,
     )
 
-    if st.button("Lancer la simulation d'entretien"):
-        llm = LLMClient()
-        manager = ManagerAgent(llm=llm, cv=cv, job=job, base_questions=[])
+    colL, colR = st.columns([0.25, 0.75])
 
-        simulator = InterviewSimulator(
-            manager=manager,
-            max_questions=num_q,
-            stt_duration=4,
-            streamlit=st,
+    with colL:
+        avatar_ph = st.empty()
+        avatar_ph.markdown(AVATAR_IDLE_HTML, unsafe_allow_html=True)
+
+    with colR:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.write(
+            "Cliquez sur **Lancer la simulation**. "
+            "L'interviewer posera les questions à voix haute, "
+            "vous répondez à l'oral, et le système enregistre l'historique."
         )
 
-        with st.spinner("Simulation en cours…"):
-            history = simulator.run()
+        if st.button("Lancer la simulation d'entretien"):
+            llm = LLMClient()
+            manager = ManagerAgent(
+                llm=llm,
+                cv=cv,
+                job=job,
+                base_questions=[],
+                max_questions=num_q,
+            )
+            simulator = InterviewSimulator(
+                manager=manager,
+                max_questions=num_q,
+                stt_duration=4,
+                streamlit=st,
+                avatar_placeholder=avatar_ph,
+            )
+            with st.spinner("Simulation en cours…"):
+                history = simulator.run()
 
-        st.session_state["history"] = history
+            st.session_state["history"] = history
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # --- Étape 4 : Feedback ---
     if "history" in st.session_state:
-        st.markdown('<div class="section-title">Étape 4 · Feedback</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-title">Étape 4 · Feedback</div>',
+            unsafe_allow_html=True,
+        )
         if st.button("Générer le résumé et les conseils"):
             history = st.session_state["history"]
             llm = LLMClient()
@@ -189,4 +225,6 @@ if "cv_data" in st.session_state and "job_data" in st.session_state:
             st.markdown(summary_md)
             st.markdown("</div>", unsafe_allow_html=True)
 else:
-    st.info("Commence par uploader un CV et une offre, puis clique sur **Analyser le CV et l'offre**.")
+    st.info(
+        "Commence par uploader un CV et une offre, puis clique sur **Analyser le CV et l'offre**."
+    )

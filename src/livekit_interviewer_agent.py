@@ -1,16 +1,19 @@
 # src/livekit_interviewer_agent.py
 #
 # LiveKit + OpenAI Realtime + Hedra
-# Interview simulation:
-# - Asks for CV PDF + job URL (CLI)
-# - Parses & exports last_cv.json + last_job.json
-# - Asks EXACTLY 4 questions in total (1 intro + 3 ManagerAgent)
-# - Then ends the interview politely
+#
+# Usage:
+#   1. Run the Streamlit app first to generate exports/last_cv.json
+#      and exports/last_job.json.
+#   2. Then run:  python src/livekit_interviewer_agent.py dev
+#
+# Alternatively, call prepare_profile_via_cli() for a standalone CLI flow.
 
 import os
 import sys
 import json
 import asyncio
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -29,36 +32,44 @@ from livekit.plugins import hedra as lk_hedra
 from llm_client import LLMClient
 from agents.manager_agent import ManagerAgent
 from models.data_models import CVData, JobData
-
 from services.cv_parser import parse_cv
 from services.job_scraper import scrape_job_url
+from utils.profile_export import (
+    export_cv,
+    export_job,
+    load_cv,
+    load_job,
+    CV_JSON_PATH,
+    JOB_JSON_PATH,
+)
 
-
-# ---------------------------------------------------------
-# Environment
-# ---------------------------------------------------------
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 HEDRA_API_KEY = os.getenv("HEDRA_API_KEY")
 HEDRA_AVATAR_ID = os.getenv("HEDRA_AVATAR_ID")
 
-EXPORT_DIR = Path("exports")
-CV_JSON_PATH = EXPORT_DIR / "last_cv.json"
-JOB_JSON_PATH = EXPORT_DIR / "last_job.json"
+# Number of ManagerAgent questions on top of the fixed intro question
+MANAGER_QUESTION_COUNT = int(os.getenv("LIVEKIT_QUESTION_COUNT", "3"))
+MAX_QUESTIONS = 1 + MANAGER_QUESTION_COUNT  # intro + N from ManagerAgent
 
 
 # ---------------------------------------------------------
-# Step 0 – Ask user for CV + job link
+# Step 0 – CLI profile preparation (optional standalone flow)
 # ---------------------------------------------------------
 def prepare_profile_via_cli() -> None:
+    """
+    Asks the user for CV path + job URL, parses both, and writes
+    exports/last_cv.json + exports/last_job.json so the LiveKit
+    worker can load them without re-parsing.
+    """
     print("\n[Setup] Prepare your interview profile")
 
     cv_path = input("Path to your CV PDF: ").strip()
     job_url = input("Job / Indeed URL: ").strip()
 
-    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-
-    print("[Setup] Initializing LLMClient for CV parsing...")
+    print("[Setup] Initializing LLMClient for CV parsing…")
     llm = LLMClient()
 
     print(f"[Setup] Parsing CV from: {cv_path}")
@@ -67,121 +78,89 @@ def prepare_profile_via_cli() -> None:
     print(f"[Setup] Scraping job posting from: {job_url}")
     job_obj = scrape_job_url(job_url)
 
-    cv_struct = getattr(cv_obj, "structured", cv_obj)
-    job_struct = getattr(job_obj, "structured", job_obj)
+    export_cv(cv_obj)
+    export_job(job_obj)
 
-    print(f"[Setup] Writing {CV_JSON_PATH}")
-    with CV_JSON_PATH.open("w", encoding="utf-8") as f:
-        json.dump(cv_struct, f, ensure_ascii=False, indent=2)
-
-    print(f"[Setup] Writing {JOB_JSON_PATH}")
-    with JOB_JSON_PATH.open("w", encoding="utf-8") as f:
-        json.dump(job_struct, f, ensure_ascii=False, indent=2)
-
-    print("\n[Setup] Export complete! Starting LiveKit...\n")
+    print("\n[Setup] Export complete! Starting LiveKit…\n")
 
 
 # ---------------------------------------------------------
 # Worker entrypoint
 # ---------------------------------------------------------
 async def entrypoint(ctx: JobContext):
-    print("[LiveKit] Worker starting interview agent.")
-
+    logger.info("[LiveKit] Worker starting interview agent.")
     await ctx.connect()
 
-    # Realtime model (we control behavior via instructions in Agent + generate_reply)
-    rt_model = lk_openai.realtime.RealtimeModel(
-        voice="alloy",
-    )
+    # Realtime voice model
+    rt_model = lk_openai.realtime.RealtimeModel(voice="alloy")
 
+    # Load structured profile from disk (written by Streamlit or CLI)
     llm = LLMClient()
-
-    print(f"[System] Loading CV from {CV_JSON_PATH}")
-    with CV_JSON_PATH.open("r", encoding="utf-8") as f:
-        cv_struct = json.load(f)
-
-    print(f"[System] Loading Job from {JOB_JSON_PATH}")
-    with JOB_JSON_PATH.open("r", encoding="utf-8") as f:
-        job_struct = json.load(f)
-
-    cv_data = CVData(raw_text="", structured=cv_struct)
-    job_data = JobData(raw_text="", structured=job_struct)
+    cv_data = load_cv()
+    job_data = load_job()
+    logger.info("[LiveKit] Profile loaded. CV name: %s", cv_data.structured.get("name", "—"))
 
     manager = ManagerAgent(
         llm=llm,
         cv=cv_data,
         job=job_data,
         base_questions=[],
+        max_questions=MANAGER_QUESTION_COUNT,
     )
 
     session = AgentSession(llm=rt_model)
 
-    # Hedra avatar
+    # Hedra avatar (optional)
     if HEDRA_API_KEY and HEDRA_AVATAR_ID:
         try:
             avatar = lk_hedra.AvatarSession(avatar_id=HEDRA_AVATAR_ID)
             await avatar.start(session, room=ctx.room)
-            print("[Hedra] Avatar online.")
+            logger.info("[Hedra] Avatar online.")
         except Exception as e:
-            print("[Hedra] Failed to start avatar:", e)
+            logger.warning("[Hedra] Failed to start avatar: %s", e)
     else:
-        print("[Hedra] ⚠ Avatar disabled (missing env vars).")
+        logger.warning("[Hedra] Avatar disabled (HEDRA_API_KEY / HEDRA_AVATAR_ID missing).")
 
-    # -----------------------------------------------------
-    # EXACTLY 4 questions total (intro + 3 ManagerAgent)
-    # -----------------------------------------------------
     total_questions = 0
-    MAX_QUESTIONS = 4
 
-    async def end_interview(final_message: str = None):
-        """
-        Ends the interview politely and closes the session.
-        """
-        message = final_message or (
-            "Merci, l'entretien est terminé. Nous avons couvert les points essentiels."
+    # ----------------------------------------------------------------
+    # Helpers
+    # ----------------------------------------------------------------
+    async def end_interview(message: str | None = None) -> None:
+        farewell = message or (
+            "Merci beaucoup pour cet entretien. "
+            "Nous reviendrons vers vous prochainement. Bonne continuation !"
         )
         await session.generate_reply(
             instructions=(
                 "Tu es Clara, recruteuse. "
                 "Lis EXACTEMENT cette phrase, sans rien ajouter : "
-                f"\"{message}\""
+                f'"{farewell}"'
             )
         )
         await asyncio.sleep(1)
         await session.close()
 
-    # -----------------------------------------------------
-    # Manager step: ask next question or end
-    # -----------------------------------------------------
-    async def run_manager_step():
+    async def ask_manager_question() -> None:
         nonlocal total_questions
 
-        # If we already reached the max, just end
         if total_questions >= MAX_QUESTIONS:
             await end_interview()
             return
 
         decision = manager.next_step()
-        print("[ManagerAgent decision]", decision)
+        logger.info("[ManagerAgent] Decision: %s", decision)
 
-        # If ManagerAgent says "end", respect it, but still within our 4-question max
         if decision.get("end"):
-            await end_interview("Merci, l'entretien est terminé.")
-            return
-
-        question = (decision.get("next_question") or "").strip()
-
-        if not question:
-            await end_interview("Nous arrivons au terme de cette démonstration.")
-            return
-
-        print("[Interviewer] ❓", question)
-
-        # If asking this would exceed the limit, end instead
-        if total_questions >= MAX_QUESTIONS:
             await end_interview()
             return
 
+        question = (decision.get("next_question") or "").strip()
+        if not question:
+            await end_interview()
+            return
+
+        logger.info("[Interviewer] Q%d: %s", total_questions + 1, question)
         await session.generate_reply(
             instructions=(
                 "Tu joues STRICTEMENT le rôle de recruteuse en entretien. "
@@ -189,62 +168,57 @@ async def entrypoint(ctx: JobContext):
                 "ne réponds jamais à la place du candidat. "
                 "Lis EXACTEMENT la question suivante, mot pour mot, "
                 "sans rien ajouter avant, après ou entre parenthèses : "
-                f"\"{question}\""
+                f'"{question}"'
             )
         )
-
         total_questions += 1
 
+    # ----------------------------------------------------------------
+    # Handle candidate answers
+    # ----------------------------------------------------------------
+    async def handle_transcription(event) -> None:
+        text = getattr(event, "text", "")
+        logger.info("[Candidate] %s", text)
 
-    # -----------------------------------------------------
-    # Handle user transcription (answers)
-    # -----------------------------------------------------
-    async def handle_transcription(event):
-        text = event.text
-        print(f"[User] {text}")
-
-        # If already at 4, ignore extra answers and end gracefully
         if total_questions >= MAX_QUESTIONS:
             await end_interview()
             return
 
         manager.record_answer("", text)
-        await run_manager_step()
+        await ask_manager_question()
 
     @session.on("user_input_transcribed")
     def on_transcription(event):
         asyncio.create_task(handle_transcription(event))
 
-    # -----------------------------------------------------
-    # Intro: counts as Question #1
-    # -----------------------------------------------------
-    async def start_interview():
+    # ----------------------------------------------------------------
+    # Start with a fixed intro question (counts as question #1)
+    # ----------------------------------------------------------------
+    async def start_interview() -> None:
         nonlocal total_questions
 
-        intro_question = (
-            "Bonjour, merci d'être présente pour cet entretien. "
+        intro = (
+            "Bonjour, merci d'être présent(e) pour cet entretien. "
             "Pour commencer, pouvez-vous vous présenter brièvement "
             "et m'expliquer ce qui vous motive pour ce poste ?"
         )
 
-        print("[Interviewer] Intro question")
+        logger.info("[Interviewer] Intro question")
         await session.generate_reply(
             instructions=(
-                "Tu es Clara, recruteuse IA. "
-                "Tu es déjà en plein entretien, pas un chatbot généraliste. "
+                "Tu es Clara, recruteuse IA francophone. "
+                "Tu mènes un entretien d'embauche simulé. "
                 "Ne donne aucun conseil, ne proposes pas de sujets de discussion. "
                 "Lis EXACTEMENT la phrase suivante, mot pour mot, "
                 "sans rien ajouter avant, après ou entre parenthèses : "
-                f"\"{intro_question}\""
+                f'"{intro}"'
             )
         )
-
-        # Intro counts as question #1
         total_questions += 1
 
-    # -----------------------------------------------------
+    # ----------------------------------------------------------------
     # Start LiveKit session
-    # -----------------------------------------------------
+    # ----------------------------------------------------------------
     await session.start(
         room=ctx.room,
         agent=Agent(
@@ -252,8 +226,7 @@ async def entrypoint(ctx: JobContext):
                 "Tu es Clara, une recruteuse IA francophone spécialisée en data et IA. "
                 "Tu mènes un entretien d'embauche simulé. "
                 "Tu ne dois JAMAIS dire des phrases de chatbot généraliste comme "
-                "\"De quoi avez-vous envie de discuter aujourd'hui ?\" ou "
-                "\"Comment puis-je vous aider ?\". "
+                '"De quoi avez-vous envie de discuter ?" ou "Comment puis-je vous aider ?". '
                 "Tu ne donnes jamais de conseils, tu ne fais pas de coaching, "
                 "tu ne réponds pas à la place du candidat. "
                 "Tu parles uniquement pour poser les questions d'entretien "
@@ -273,14 +246,16 @@ async def entrypoint(ctx: JobContext):
 
     await start_interview()
 
+
+# ---------------------------------------------------------
+# Script entry point
+# ---------------------------------------------------------
 if __name__ == "__main__":
-    prepare_profile_via_cli()
+    # If exports don't exist yet, run the CLI setup flow
+    if not CV_JSON_PATH.exists() or not JOB_JSON_PATH.exists():
+        prepare_profile_via_cli()
 
     if len(sys.argv) == 1:
         sys.argv.append("dev")
 
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-        )
-    )
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

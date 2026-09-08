@@ -1,56 +1,50 @@
 # src/utils/profile_export.py
 #
-# 1) Ask user for CV file + job URL
-# 2) Use your existing services (cv_parser + job_scraper)
-# 3) Save structured JSON into exports/last_cv.json and exports/last_job.json
+# Helpers to persist CV + job structured data to disk
+# so the LiveKit/Hedra worker can load them without re-parsing.
 
-import os
 import json
+import logging
 from pathlib import Path
 
-from services.cv_parser import parse_cv  # adapt to your real function name
-from services.job_scraper import scrape_job  # adapt to your real function name
 from models.data_models import CVData, JobData
 
+logger = logging.getLogger(__name__)
 
 EXPORT_DIR = Path("exports")
 CV_JSON_PATH = EXPORT_DIR / "last_cv.json"
 JOB_JSON_PATH = EXPORT_DIR / "last_job.json"
 
 
-def export_profile(cv_path: str, job_url: str) -> None:
-    """
-    Runs the multi-agent brain on the CV + job posting once
-    and writes the structured result for the LiveKit worker.
-    """
-
+def export_cv(cv: CVData) -> None:
+    """Serialize CVData.structured → exports/last_cv.json."""
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # --- 1) Parse CV -------------------------------------------------
-    print(f"[ProfileExport] 📄 Parsing CV: {cv_path}")
-    cv: CVData = parse_cv(cv_path)  # make sure this returns a CVData
-
-    # --- 2) Scrape / parse job posting ------------------------------
-    print(f"[ProfileExport] 🔗 Scraping job posting: {job_url}")
-    job: JobData = scrape_job(job_url)  # make sure this returns a JobData
-
-    # --- 3) Dump structured data to JSON ----------------------------
-    print(f"[ProfileExport] Writing {CV_JSON_PATH}")
     with CV_JSON_PATH.open("w", encoding="utf-8") as f:
         json.dump(cv.structured, f, ensure_ascii=False, indent=2)
+    logger.info("[ProfileExport] CV written → %s", CV_JSON_PATH)
 
-    print(f"[ProfileExport] Writing {JOB_JSON_PATH}")
+
+def export_job(job: JobData) -> None:
+    """Serialize JobData.structured → exports/last_job.json."""
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     with JOB_JSON_PATH.open("w", encoding="utf-8") as f:
         json.dump(job.structured, f, ensure_ascii=False, indent=2)
-
-    print("\n✅ Profile export complete.")
-    print(f"   CV JSON : {CV_JSON_PATH}")
-    print(f"   Job JSON: {JOB_JSON_PATH}")
-    print("   You can now start the LiveKit + Hedra interviewer worker.\n")
+    logger.info("[ProfileExport] Job written → %s", JOB_JSON_PATH)
 
 
-if __name__ == "__main__":
-    cv_path = input("Path to your CV PDF: ").strip()
-    job_url = input("Indeed / job posting URL: ").strip()
+def load_cv() -> CVData:
+    """Load CVData from exports/last_cv.json."""
+    if not CV_JSON_PATH.exists():
+        raise FileNotFoundError(f"[ProfileExport] {CV_JSON_PATH} not found. Run the Streamlit app first.")
+    with CV_JSON_PATH.open("r", encoding="utf-8") as f:
+        structured = json.load(f)
+    return CVData(raw_text="", structured=structured)
 
-    export_profile(cv_path, job_url)
+
+def load_job() -> JobData:
+    """Load JobData from exports/last_job.json."""
+    if not JOB_JSON_PATH.exists():
+        raise FileNotFoundError(f"[ProfileExport] {JOB_JSON_PATH} not found. Run the Streamlit app first.")
+    with JOB_JSON_PATH.open("r", encoding="utf-8") as f:
+        structured = json.load(f)
+    return JobData(raw_text="", structured=structured)
